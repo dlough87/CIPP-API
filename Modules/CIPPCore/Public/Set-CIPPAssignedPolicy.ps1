@@ -1,60 +1,58 @@
 function Set-CIPPAssignedPolicy {
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess = $true)]
     param(
         $GroupName,
         $PolicyId,
         $Type,
         $TenantFilter,
-        $APIName = "Assign Application",
-        $ExecutingUser
+        $PlatformType,
+        $APIName = 'Assign Policy',
+        $Headers
     )
-
-    try { 
+    if (!$PlatformType) { $PlatformType = 'deviceManagement' }
+    try {
         $assignmentsObject = switch ($GroupName) {
-            "allLicensedUsers" {
+            'allLicensedUsers' {
                 @(
                     @{
-                        id     = ""
                         target = @{
-                            "@odata.type" = "#microsoft.graph.allLicensedUsersAssignmentTarget"
+                            '@odata.type' = '#microsoft.graph.allLicensedUsersAssignmentTarget'
                         }
                     }
                 )
-                break 
+                break
             }
-            "AllDevices" {
+            'AllDevices' {
                 @(
                     @{
-                        id     = ""
                         target = @{
-                            "@odata.type" = "#microsoft.graph.allDevicesAssignmentTarget"
+                            '@odata.type' = '#microsoft.graph.allDevicesAssignmentTarget'
                         }
                     }
                 )
-                break 
+                break
             }
-            "AllDevicesAndUsers" { 
+            'AllDevicesAndUsers' {
                 @(
                     @{
-                        id     = ""
                         target = @{
-                            "@odata.type" = "#microsoft.graph.allDevicesAssignmentTarget"
+                            '@odata.type' = '#microsoft.graph.allDevicesAssignmentTarget'
                         }
                     },
                     @{
-                        id     = ""
                         target = @{
-                            "@odata.type" = "#microsoft.graph.allLicensedUsersAssignmentTarget"
+                            '@odata.type' = '#microsoft.graph.allLicensedUsersAssignmentTarget'
                         }
                     }
                 )
             }
             default {
-                $GroupNames = $GroupName.Split(",")
-                $GroupIds = New-GraphGetRequest -uri "https://graph.microsoft.com/beta/groups" -tenantid $TenantFilter | ForEach-Object { 
+                Write-Host "We're supposed to assign a custom group. The group is $GroupName"
+                $GroupNames = $GroupName.Split(',')
+                $GroupIds = New-GraphGetRequest -uri 'https://graph.microsoft.com/beta/groups?$select=id,displayName&$top=999' -tenantid $TenantFilter | ForEach-Object {
                     $Group = $_
                     foreach ($SingleName in $GroupNames) {
-                        if ($_.displayname -like $SingleName) {
+                        if ($_.displayName -like $SingleName) {
                             $group.id
                         }
                     }
@@ -62,7 +60,7 @@ function Set-CIPPAssignedPolicy {
                 foreach ($Group in $GroupIds) {
                     @{
                         target = @{
-                            "@odata.type" = "#microsoft.graph.groupAssignmentTarget"
+                            '@odata.type' = '#microsoft.graph.groupAssignmentTarget'
                             groupId       = $Group
                         }
                     }
@@ -72,12 +70,16 @@ function Set-CIPPAssignedPolicy {
         $assignmentsObject = [PSCustomObject]@{
             assignments = @($assignmentsObject)
         }
-        $assign = New-GraphPOSTRequest -uri  "https://graph.microsoft.com/beta/deviceManagement/$Type('$($PolicyId)')/assign" -tenantid $tenantFilter -type POST -body ($assignmentsObject | ConvertTo-Json -Depth 10)
-        Write-LogMessage -user $ExecutingUser -API $APIName -message "Assigned Policy to $($GroupName)" -Sev "Info" -tenant $TenantFilter
-        return "Assigned policy to $($GroupName)"
-    }
-    catch {
-        Write-LogMessage -user $ExecutingUser -API $APIName -message "Failed to assign Policy to $GroupName" -Sev "Error" -tenant $TenantFilter
-        return "Could not assign policy to $GroupName. Error: $($_.Exception.Message)"
+
+        $AssignJSON = ($assignmentsObject | ConvertTo-Json -Depth 10 -Compress)
+        Write-Host "AssignJSON: $AssignJSON"
+        if ($PSCmdlet.ShouldProcess($GroupName, "Assigning policy $PolicyId")) {
+            Write-Host "https://graph.microsoft.com/beta/$($PlatformType)/$Type('$($PolicyId)')/assign"
+            $null = New-GraphPOSTRequest -uri "https://graph.microsoft.com/beta/$($PlatformType)/$Type('$($PolicyId)')/assign" -tenantid $tenantFilter -type POST -body $AssignJSON
+            Write-LogMessage -headers $Headers -API $APIName -message "Assigned $GroupName to Policy $PolicyId" -Sev 'Info' -tenant $TenantFilter
+        }
+    } catch {
+        $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
+        Write-LogMessage -headers $Headers -API $APIName -message "Failed to assign $GroupName to Policy $PolicyId, using Platform $PlatformType and $Type. The error is:$ErrorMessage" -Sev 'Error' -tenant $TenantFilter -LogData $ErrorMessage
     }
 }
